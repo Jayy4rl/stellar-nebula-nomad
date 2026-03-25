@@ -279,6 +279,7 @@ fn test_scan_nebula_consistency_with_individual_calls() {
     assert_eq!(rarity, scan_rarity);
 }
 
+use soroban_sdk::{contract, contractimpl};
 use stellar_nebula_nomad::resource_minter::{
     ResourceError, ResourceMinter, ResourceMinterClient, ResourceType, LEDGERS_PER_DAY,
 };
@@ -311,9 +312,19 @@ impl MockNebulaExplorer {
 
 /// Boot a fresh environment with all three contracts registered and initialised.
 /// Returns (env, client_contract_id, admin_address, player_address).
-fn setup_env() -> (Env, Address, Address, Address) {
+fn setup_minter_env() -> (Env, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
+    env.ledger().set(LedgerInfo {
+        protocol_version: 22,
+        sequence_number: 0,
+        timestamp: 0,
+        network_id: [0u8; 32],
+        base_reserve: 10,
+        min_temp_entry_ttl: 100,
+        min_persistent_entry_ttl: 6_312_000,
+        max_entry_ttl: 6_312_000,
+    });
 
     let ship_id = env.register_contract(None, MockShipRegistry);
     let nebula_id = env.register_contract(None, MockNebulaExplorer);
@@ -341,11 +352,11 @@ fn advance_ledgers(env: &Env, n: u32) {
     env.ledger().set(LedgerInfo {
         sequence_number: seq + n,
         timestamp: ts + (n as u64 * 5),
-        protocol_version: 20,
+        protocol_version: 22,
         network_id: Default::default(),
         base_reserve: 10,
         min_temp_entry_ttl: 16,
-        min_persistent_entry_ttl: 4096,
+        min_persistent_entry_ttl: 6_312_000,
         max_entry_ttl: 6_312_000,
     });
 }
@@ -354,7 +365,7 @@ fn advance_ledgers(env: &Env, n: u32) {
 
 #[test]
 fn test_harvest_base_amount() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     // anomaly_index = 0 → base 100 + 0 × 10 = 100
     let minted = client.harvest_resource(&player, &1u64, &0u32);
@@ -364,7 +375,7 @@ fn test_harvest_base_amount() {
 
 #[test]
 fn test_harvest_rarity_bonus() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     // anomaly_index = 5 → 100 + 5 × 10 = 150
     assert_eq!(client.harvest_resource(&player, &1u64, &5u32), 150);
@@ -372,7 +383,7 @@ fn test_harvest_rarity_bonus() {
 
 #[test]
 fn test_harvest_multiple_ships_have_independent_caps() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     // Drain ship 1's daily cap (10 × 100 = 1000)
     for _ in 0..10 {
@@ -384,7 +395,7 @@ fn test_harvest_multiple_ships_have_independent_caps() {
 
 #[test]
 fn test_harvest_daily_cap_enforced() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     for _ in 0..10 {
         client.harvest_resource(&player, &1u64, &0u32);
@@ -395,7 +406,7 @@ fn test_harvest_daily_cap_enforced() {
 
 #[test]
 fn test_harvest_cap_resets_after_one_day() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     for _ in 0..10 {
         client.harvest_resource(&player, &1u64, &0u32);
@@ -407,7 +418,7 @@ fn test_harvest_cap_resets_after_one_day() {
 
 #[test]
 fn test_harvest_amount_capped_near_daily_limit() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     // 9 × 100 = 900 harvested; 100 remaining in cap
     for _ in 0..9 {
@@ -421,7 +432,7 @@ fn test_harvest_amount_capped_near_daily_limit() {
 
 #[test]
 fn test_stake_deducts_liquid_balance() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32); // 100 stardust
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -431,7 +442,7 @@ fn test_stake_deducts_liquid_balance() {
 
 #[test]
 fn test_stake_insufficient_resources_rejected() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     let err = client.try_stake_for_yield(
         &player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY,
@@ -441,7 +452,7 @@ fn test_stake_insufficient_resources_rejected() {
 
 #[test]
 fn test_stake_below_min_duration_rejected() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     // 1000 < 17280 min
@@ -453,7 +464,7 @@ fn test_stake_below_min_duration_rejected() {
 
 #[test]
 fn test_stake_zero_amount_rejected() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     let err = client.try_stake_for_yield(
         &player, &ResourceType::Stardust, &0i128, &LEDGERS_PER_DAY,
@@ -463,7 +474,7 @@ fn test_stake_zero_amount_rejected() {
 
 #[test]
 fn test_duplicate_stake_rejected() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     // Harvest twice so there is enough balance for a second attempted stake
     client.harvest_resource(&player, &1u64, &0u32);
@@ -479,7 +490,7 @@ fn test_duplicate_stake_rejected() {
 
 #[test]
 fn test_claim_yield_after_24h() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32); // 100 stardust
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -494,7 +505,7 @@ fn test_claim_yield_after_24h() {
 
 #[test]
 fn test_claim_yield_after_1_year() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32); // 100 stardust
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -509,7 +520,7 @@ fn test_claim_yield_after_1_year() {
 
 #[test]
 fn test_pending_yield_matches_claim_amount() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -523,7 +534,7 @@ fn test_pending_yield_matches_claim_amount() {
 
 #[test]
 fn test_yield_accumulates_across_partial_claims() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     // Use a 2-year lock so we can keep claiming
@@ -545,7 +556,7 @@ fn test_yield_accumulates_across_partial_claims() {
 
 #[test]
 fn test_unstake_blocked_immediately_after_stake() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -555,7 +566,7 @@ fn test_unstake_blocked_immediately_after_stake() {
 
 #[test]
 fn test_unstake_allowed_after_timelock_expires() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -570,7 +581,7 @@ fn test_unstake_allowed_after_timelock_expires() {
 
 #[test]
 fn test_unstake_auto_claims_residual_yield() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -585,7 +596,7 @@ fn test_unstake_auto_claims_residual_yield() {
 
 #[test]
 fn test_unstake_then_restake_succeeds() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.harvest_resource(&player, &1u64, &0u32);
     client.stake_for_yield(&player, &ResourceType::Stardust, &100i128, &LEDGERS_PER_DAY);
@@ -602,7 +613,7 @@ fn test_unstake_then_restake_succeeds() {
 
 #[test]
 fn test_resource_type_balances_are_independent() {
-    let (env, cid, _, player) = setup_env();
+    let (env, cid, _, player) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
 
     client.harvest_resource(&player, &1u64, &0u32); // 100 stardust
@@ -624,7 +635,7 @@ fn test_resource_type_balances_are_independent() {
 
 #[test]
 fn test_update_daily_cap() {
-    let (env, cid, _, _) = setup_env();
+    let (env, cid, _, _) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.update_daily_cap(&2_000i128);
     assert_eq!(client.get_config().unwrap().daily_harvest_cap, 2_000);
@@ -632,7 +643,7 @@ fn test_update_daily_cap() {
 
 #[test]
 fn test_update_apy() {
-    let (env, cid, _, _) = setup_env();
+    let (env, cid, _, _) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     client.update_apy(&1_000u32); // 10 %
     assert_eq!(client.get_config().unwrap().apy_basis_points, 1_000);
@@ -640,7 +651,7 @@ fn test_update_apy() {
 
 #[test]
 fn test_double_init_rejected() {
-    let (env, cid, admin, _) = setup_env();
+    let (env, cid, admin, _) = setup_minter_env();
     let client = ResourceMinterClient::new(&env, &cid);
     let dummy = Address::generate(&env);
     let err = client.try_init(
