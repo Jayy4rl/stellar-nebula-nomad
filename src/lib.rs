@@ -38,6 +38,9 @@ mod sustainability_metrics;
 mod anomaly_classifier;
 mod shared_lib;
 
+mod storage_optim;
+mod state_snapshot;
+
 pub use nebula_explorer::{
     calculate_rarity_tier, compute_layout_hash, generate_nebula_layout, CellType, NebulaCell,
     NebulaLayout, Rarity, GRID_SIZE, TOTAL_CELLS,
@@ -115,6 +118,19 @@ pub use audit_logger::{AuditEntry, AuditLoggerError, get_audit_count, log_audit_
 pub use sustainability_metrics::{claim_sustainability_reward, get_footprint, record_transaction_footprint, FootprintRecord, SustainabilityError};
 pub use anomaly_classifier::{classify_anomaly, classify_batch, get_classification, refine_classification, AnomalyError, ClassificationRecord};
 pub use shared_lib::{calculate_yield, validate_address, SharedError};
+
+pub use storage_optim::{
+    store_with_bump, get_optimized_entry, batch_store_with_bump, guard_reentrancy,
+    release_guard, store_ship_nebula, get_ship_nebula, initialize_bump_config,
+    update_bump_config, get_bump_config, set_upgrade_target, get_upgrade_target,
+    reset_burst_counter, StorageError, OptimizedEntry, ShipNebulaData, OptimResult,
+    BumpConfig, DEFAULT_BUMP_TTL, MAX_BUMP_TTL, MAX_BURST_READS,
+};
+pub use state_snapshot::{
+    take_snapshot, restore_from_snapshot, get_snapshot, get_ship_snapshots,
+    auto_snapshot, reset_session_count, StateSnapshot, SnapshotError,
+    RestoreResult, MAX_SNAPSHOTS_PER_SESSION, SNAPSHOT_TTL, AUTO_SNAPSHOT_INTERVAL,
+};
 
 #[contract]
 pub struct NebulaNomadContract;
@@ -824,7 +840,7 @@ impl NebulaNomadContract {
         batch_processor::clear_batch(&env, &player)
     }
 
-    // ─── On-chain Audit Logging (Issue #64) ───────────────────────────────
+// ─── On-chain Audit Logging (Issue #64) ───────────────────────────────
 
     pub fn log_audit_event(
         env: Env,
@@ -915,5 +931,135 @@ impl NebulaNomadContract {
 
     pub fn calculate_yield(env: Env, base: i128, multiplier: u32) -> Result<i128, SharedError> {
         shared_lib::calculate_yield(base, multiplier)
+    }
+
+    // ─── Storage Optimization & Re-Entrancy Guards (Issue #10) ────────────
+
+    /// Initialize the bump storage configuration. Admin-only.
+    pub fn initialize_bump_config(env: Env, admin: Address) {
+        storage_optim::initialize_bump_config(&env, &admin)
+    }
+
+    /// Store data with optimized persistent bump TTL.
+    pub fn store_with_bump(
+        env: Env,
+        key: Symbol,
+        value: BytesN<64>,
+    ) -> Result<OptimResult, StorageError> {
+        storage_optim::store_with_bump(&env, key, value)
+    }
+
+    /// Retrieve an optimized storage entry.
+    pub fn get_optimized_entry(
+        env: Env,
+        key: Symbol,
+    ) -> Result<OptimizedEntry, StorageError> {
+        storage_optim::get_optimized_entry(&env, key)
+    }
+
+    /// Batch-store multiple entries with a single re-entrancy guard.
+    pub fn batch_store_with_bump(
+        env: Env,
+        keys: Vec<Symbol>,
+        values: Vec<BytesN<64>>,
+    ) -> Result<Vec<OptimResult>, StorageError> {
+        storage_optim::batch_store_with_bump(&env, keys, values)
+    }
+
+    /// Store composite ship-nebula data in a single slot.
+    pub fn store_ship_nebula(
+        env: Env,
+        ship_id: u64,
+        nebula_id: u64,
+        scan_count: u32,
+        resource_cache: u64,
+    ) -> Result<(), StorageError> {
+        storage_optim::store_ship_nebula(&env, ship_id, nebula_id, scan_count, resource_cache)
+    }
+
+    /// Retrieve composite ship-nebula data.
+    pub fn get_ship_nebula(
+        env: Env,
+        ship_id: u64,
+        nebula_id: u64,
+    ) -> Result<ShipNebulaData, StorageError> {
+        storage_optim::get_ship_nebula(&env, ship_id, nebula_id)
+    }
+
+    /// Update bump TTL configuration. Admin-only.
+    pub fn update_bump_config(
+        env: Env,
+        admin: Address,
+        default_ttl: u32,
+        max_ttl: u32,
+    ) -> Result<(), StorageError> {
+        storage_optim::update_bump_config(&env, &admin, default_ttl, max_ttl)
+    }
+
+    /// Set the proxy upgrade target address. Admin-only.
+    pub fn set_upgrade_target(
+        env: Env,
+        admin: Address,
+        target: Address,
+    ) -> Result<(), StorageError> {
+        storage_optim::set_upgrade_target(&env, &admin, target)
+    }
+
+    /// Get the current upgrade target if set.
+    pub fn get_upgrade_target(env: Env) -> Option<Address> {
+        storage_optim::get_upgrade_target(&env)
+    }
+
+    /// Reset the burst-read counter for a new invocation.
+    pub fn reset_burst_counter(env: Env) {
+        storage_optim::reset_burst_counter(&env)
+    }
+
+    // ─── On-Chain Game State Snapshots (Issue #58) ───────────────────────
+
+    /// Take a snapshot of the current ship and resource state.
+    pub fn take_snapshot(
+        env: Env,
+        caller: Address,
+        ship_id: u64,
+    ) -> Result<StateSnapshot, SnapshotError> {
+        state_snapshot::take_snapshot(&env, &caller, ship_id)
+    }
+
+    /// Restore ship state from a previously taken snapshot.
+    pub fn restore_from_snapshot(
+        env: Env,
+        caller: Address,
+        snapshot_id: u64,
+    ) -> Result<RestoreResult, SnapshotError> {
+        state_snapshot::restore_from_snapshot(&env, &caller, snapshot_id)
+    }
+
+    /// Get a snapshot by ID.
+    pub fn get_snapshot(
+        env: Env,
+        snapshot_id: u64,
+    ) -> Result<StateSnapshot, SnapshotError> {
+        state_snapshot::get_snapshot(&env, snapshot_id)
+    }
+
+    /// Get all snapshot IDs for a ship.
+    pub fn get_ship_snapshots(env: Env, ship_id: u64) -> Vec<u64> {
+        state_snapshot::get_ship_snapshots(&env, ship_id)
+    }
+
+    /// Trigger an automatic daily snapshot if the interval has elapsed.
+    pub fn auto_snapshot(
+        env: Env,
+        caller: Address,
+        ship_id: u64,
+    ) -> Result<StateSnapshot, SnapshotError> {
+        state_snapshot::auto_snapshot(&env, &caller, ship_id)
+    }
+
+    /// Reset snapshot session counter for a ship.
+    pub fn reset_session_count(env: Env, ship_id: u64) {
+        state_snapshot::reset_session_count(&env, ship_id)
+
     }
 }
