@@ -38,6 +38,8 @@ mod sustainability_metrics;
 mod anomaly_classifier;
 mod shared_lib;
 
+mod gas_sponsor;
+
 mod storage_optim;
 mod state_snapshot;
 
@@ -123,6 +125,12 @@ pub use audit_logger::{AuditEntry, AuditLoggerError, get_audit_count, log_audit_
 pub use sustainability_metrics::{claim_sustainability_reward, get_footprint, record_transaction_footprint, FootprintRecord, SustainabilityError};
 pub use anomaly_classifier::{classify_anomaly, classify_batch, get_classification, refine_classification, AnomalyError, ClassificationRecord};
 pub use shared_lib::{calculate_yield, validate_address, SharedError};
+pub use gas_sponsor::{
+    initialize as initialize_sponsorship, sponsor_first_scan, claim_sponsorship_fund,
+    has_been_sponsored, get_fund_balance, get_daily_count, get_remaining_daily_slots,
+    get_admin, get_config, update_config, mark_profile_verified,
+    MAX_DAILY_SPONSORSHIPS, SponsorConfig, SponsorError,
+};
 
 pub use storage_optim::{
     store_with_bump, get_optimized_entry, batch_store_with_bump, guard_reentrancy,
@@ -1230,5 +1238,63 @@ impl NebulaNomadContract {
     /// Return total messages sent over a pair.
     pub fn get_message_count(env: Env, pair_id: u64) -> u64 {
         entanglement_comms::get_message_count(&env, pair_id)
+    }
+
+    // ─── Gas Sponsorship API (Issue #81) ───────────────────────────────────
+
+    /// Initialize the gas sponsorship system.
+    pub fn initialize_sponsorship(env: Env, admin: Address, initial_fund: i128) -> Result<(), SponsorError> {
+        gas_sponsor::initialize(&env, &admin, initial_fund)
+    }
+
+    /// Sponsor the first scan for a new player.
+    pub fn sponsor_first_scan(env: Env, player: Address) -> Result<i128, SponsorError> {
+        gas_sponsor::sponsor_first_scan(&env, &player)
+    }
+
+    /// Admin replenishes the sponsorship fund.
+    pub fn claim_sponsorship_fund(env: Env, admin: Address, amount: i128) -> Result<i128, SponsorError> {
+        gas_sponsor::claim_sponsorship_fund(&env, &admin, amount)
+    }
+
+    /// Check if a player has already been sponsored.
+    pub fn has_been_sponsored(env: Env, player: Address) -> bool {
+        gas_sponsor::has_been_sponsored(&env, &player)
+    }
+
+    /// Get the current sponsorship fund balance.
+    pub fn get_sponsor_fund_balance(env: Env) -> i128 {
+        gas_sponsor::get_fund_balance(&env)
+    }
+
+    /// Get the current daily sponsorship count.
+    pub fn get_daily_sponsor_count(env: Env) -> u32 {
+        gas_sponsor::get_daily_count(&env)
+    }
+
+    /// Get remaining daily sponsorship slots.
+    pub fn get_remaining_sponsor_slots(env: Env) -> u32 {
+        gas_sponsor::get_remaining_daily_slots(&env)
+    }
+
+    /// Get the sponsorship admin address.
+    pub fn get_sponsor_admin(env: Env) -> Option<Address> {
+        gas_sponsor::get_admin(&env)
+    }
+
+    /// Get the sponsorship configuration.
+    pub fn get_sponsor_config(env: Env) -> Option<SponsorConfig> {
+        gas_sponsor::get_config(&env)
+    }
+
+    /// Update sponsorship configuration (admin only).
+    pub fn update_sponsor_config(
+        env: Env,
+        admin: Address,
+        min_threshold: i128,
+        sponsor_amount: i128,
+        daily_cap: u32,
+    ) -> Result<SponsorConfig, SponsorError> {
+        gas_sponsor::update_config(&env, &admin, min_threshold, sponsor_amount, daily_cap)
     }
 }
