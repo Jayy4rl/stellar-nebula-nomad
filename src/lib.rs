@@ -50,6 +50,7 @@ mod wormhole_traveler;
 mod alliance_manager;
 mod market_oracle;
 mod audio_seed_generator;
+mod config_updater;
 
 pub use nebula_explorer::{
     calculate_rarity_tier, compute_layout_hash, generate_nebula_layout, CellType, NebulaCell,
@@ -183,6 +184,13 @@ pub use audio_seed_generator::{
     initialize_presets, generate_music_seed, get_instrument_layer, get_all_layers,
     get_nebula_seed, get_preset, MusicSeed, InstrumentParams, AudioError,
     INSTRUMENT_PRESETS, MAX_LAYERS_PER_NEBULA,
+};
+pub use config_updater::{
+    initialize_config, add_signer, remove_signer, update_config, approve_config_update,
+    apply_config_update, batch_update_config, get_config_value, get_pending_update,
+    get_live_config, rollback_config, get_updater_config,
+    ConfigError, ConfigUpdate, LiveConfig, PendingConfig, UpdaterConfig,
+    CONFIG_DELAY_SECONDS, MAX_BATCH_PARAMS, DEFAULT_MIN_APPROVALS,
 };
 
 #[contract]
@@ -1505,5 +1513,83 @@ impl NebulaNomadContract {
     /// Get instrument preset by ID.
     pub fn get_preset(env: Env, preset_id: u32) -> Result<InstrumentParams, AudioError> {
         audio_seed_generator::get_preset(&env, preset_id)
+    }
+
+    // ─── Dynamic Contract Configuration Updater (Issue #63) ──────────────────
+
+    /// Initialise the config updater with admin, signers, delay, and approval threshold.
+    pub fn initialize_config(
+        env: Env,
+        admin: Address,
+        signers: Vec<Address>,
+        delay_seconds: u64,
+        min_approvals: u32,
+    ) -> Result<(), ConfigError> {
+        config_updater::initialize_config(&env, &admin, signers, delay_seconds, min_approvals)
+    }
+
+    /// Add a new authorised signer (admin only).
+    pub fn add_config_signer(env: Env, admin: Address, signer: Address) -> Result<(), ConfigError> {
+        config_updater::add_signer(&env, &admin, &signer)
+    }
+
+    /// Remove a signer (admin only).
+    pub fn remove_config_signer(env: Env, admin: Address, signer: Address) -> Result<(), ConfigError> {
+        config_updater::remove_signer(&env, &admin, &signer)
+    }
+
+    /// Propose a config change. Caller must be admin or registered signer.
+    /// Emits ConfigUpdated("proposed") event.
+    pub fn update_config(
+        env: Env,
+        caller: Address,
+        param: Symbol,
+        value: BytesN<64>,
+    ) -> Result<(), ConfigError> {
+        config_updater::update_config(&env, &caller, param, value)
+    }
+
+    /// Approve a pending config proposal. Signer only; one approval per signer per param.
+    pub fn approve_config_update(
+        env: Env,
+        signer: Address,
+        param: Symbol,
+    ) -> Result<u32, ConfigError> {
+        config_updater::approve_config_update(&env, &signer, param)
+    }
+
+    /// Apply a pending update once approval threshold and time lock are satisfied.
+    /// Emits ConfigApplied("applied") event.
+    pub fn apply_config_update(env: Env, param: Symbol) -> Result<LiveConfig, ConfigError> {
+        config_updater::apply_config_update(&env, param)
+    }
+
+    /// Batch-propose up to MAX_BATCH_PARAMS (5) config changes in one transaction.
+    pub fn batch_update_config(
+        env: Env,
+        caller: Address,
+        updates: Vec<ConfigUpdate>,
+    ) -> Result<u32, ConfigError> {
+        config_updater::batch_update_config(&env, &caller, updates)
+    }
+
+    /// Return the live (applied) value for a config param, or None.
+    pub fn get_config_value(env: Env, param: Symbol) -> Option<BytesN<64>> {
+        config_updater::get_config_value(&env, param)
+    }
+
+    /// Return the pending (not-yet-applied) proposal for a param, or None.
+    pub fn get_pending_config(env: Env, param: Symbol) -> Option<PendingConfig> {
+        config_updater::get_pending_update(&env, param)
+    }
+
+    /// Cancel a pending config proposal (admin only).
+    pub fn rollback_config(env: Env, admin: Address, param: Symbol) -> Result<(), ConfigError> {
+        config_updater::rollback_config(&env, &admin, param)
+    }
+
+    /// Return the config updater's own metadata (admin, delay, min_approvals).
+    pub fn get_updater_config(env: Env) -> Option<UpdaterConfig> {
+        config_updater::get_updater_config(&env)
     }
 }
