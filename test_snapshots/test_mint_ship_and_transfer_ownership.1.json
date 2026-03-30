@@ -21,7 +21,7 @@
                   "symbol": "fighter"
                 },
                 {
-                  "bytes": "7b227061696e74223a22626c7565227d"
+                  "bytes": "00000000"
                 }
               ]
             }
@@ -51,8 +51,7 @@
           "sub_invocations": []
         }
       ]
-    ],
-    []
+    ]
   ],
   "ledger": {
     "protocol_version": 22,
@@ -255,7 +254,7 @@
                         "symbol": "metadata"
                       },
                       "val": {
-                        "bytes": "7b227061696e74223a22626c7565227d"
+                        "bytes": "00000000"
                       }
                     },
                     {
@@ -451,5 +450,39 @@
       ]
     ]
   },
-  "events": []
+  "events": [
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "ship"
+              },
+              {
+                "symbol": "xfer"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "u64": 1
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    }
+  ]
 }
