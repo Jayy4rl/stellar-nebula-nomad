@@ -1,10 +1,10 @@
 #![cfg(test)]
 
 use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo};
-use soroban_sdk::{vec, Address, BytesN, Env, IntoVal, Val, Vec};
+use soroban_sdk::{symbol_short, vec, Address, BytesN, Env, String, Vec};
 use stellar_nebula_nomad::{
-    CellType, NebulaNomadContract, NebulaNomadContractClient, NebulaCell, NebulaLayout, Rarity,
-    GRID_SIZE, TOTAL_CELLS,
+    CellType, NebulaCell, NebulaLayout, NebulaNomadContract, NebulaNomadContractClient, Rarity,
+    Ship, GRID_SIZE, TOTAL_CELLS,
 };
 
 fn setup_env() -> (Env, NebulaNomadContractClient<'static>, Address) {
@@ -257,7 +257,10 @@ fn test_scan_nebula_emits_event() {
     let _result = client.scan_nebula(&seed, &player);
 
     let events = env.events().all();
-    assert!(!events.is_empty(), "Expected NebulaScanned event to be emitted");
+    assert!(
+        !events.is_empty(),
+        "Expected NebulaScanned event to be emitted"
+    );
 
     // Verify the last event has the correct topics
     let last = events.get(events.len() - 1).unwrap();
@@ -279,3 +282,181 @@ fn test_scan_nebula_consistency_with_individual_calls() {
     assert_eq!(rarity, scan_rarity);
 }
 
+// ─── onboarding tutorial flow ────────────────────────────────────────────
+
+#[test]
+fn test_onboarding_full_tutorial_flow() {
+    let (env, client, player) = setup_env();
+
+    let admin = Address::generate(&env);
+    client.init_onboarding(&admin);
+    client.create_profile(&player);
+
+    for step in 0..5u32 {
+        let reward = client.complete_tutorial_step(&player, &step);
+        assert!(reward > 0);
+    }
+
+    let progress = client.get_tutorial_progress(&player).unwrap();
+    assert_eq!(progress.completed_count, 5);
+    assert_eq!(progress.completed_at, 1_700_000_000);
+
+    let starter_resources = client.get_starter_resources(&player);
+    assert_eq!(starter_resources, 275);
+}
+
+#[test]
+fn test_onboarding_step_cannot_be_replayed() {
+    let (env, client, player) = setup_env();
+
+    let admin = Address::generate(&env);
+    client.init_onboarding(&admin);
+    client.create_profile(&player);
+
+    client.complete_tutorial_step(&player, &0);
+    let replay = client.try_complete_tutorial_step(&player, &0);
+    assert!(replay.is_err());
+}
+
+// ─── bug bounty payout engine ────────────────────────────────────────────
+
+#[test]
+fn test_bug_bounty_approval_cycle() {
+    let (env, client, _) = setup_env();
+
+    let admin = Address::generate(&env);
+    let approver_2 = Address::generate(&env);
+    let reporter = Address::generate(&env);
+
+    let approvers = vec![&env, approver_2.clone()];
+    client.init_bounty_engine(&admin, &approvers, &2, &5_000, &3600);
+    client.fund_bounty_pool(&admin, &20_000);
+
+    let report_id = client.submit_bug_report(
+        &reporter,
+        &String::from_str(&env, "critical exploit in scan verifier"),
+        &symbol_short!("high"),
+    );
+
+    let first = client.approve_and_pay_bounty(&admin, &report_id, &2_000);
+    assert!(!first);
+
+    let second = client.approve_and_pay_bounty(&approver_2, &report_id, &2_000);
+    assert!(second);
+
+    let balance = client.get_bounty_balance(&reporter);
+    assert_eq!(balance, 2_000);
+    assert_eq!(client.get_bounty_pool(), 18_000);
+}
+
+#[test]
+fn test_bug_report_rejects_invalid_severity() {
+    let (env, client, _) = setup_env();
+
+    let admin = Address::generate(&env);
+    let reporter = Address::generate(&env);
+    let approvers = vec![&env, Address::generate(&env)];
+
+    client.init_bounty_engine(&admin, &approvers, &2, &5_000, &3600);
+
+    let invalid = client.try_submit_bug_report(
+        &reporter,
+        &String::from_str(&env, "unknown severity class"),
+        &symbol_short!("sev_x"),
+    );
+    assert!(invalid.is_err());
+}
+
+// ─── standardized event framework ────────────────────────────────────────
+
+#[test]
+fn test_event_framework_emit_and_query() {
+    let (env, client, caller) = setup_env();
+    let admin = Address::generate(&env);
+
+    client.init_event_framework(&admin);
+
+    let payload = BytesN::from_array(&env, &[9u8; 256]);
+    let event_id = client.emit_standard_event(&caller, &symbol_short!("system"), &payload);
+    assert!(event_id > 0);
+
+    let results = client.query_recent_events(&symbol_short!("system"), &5);
+    assert_eq!(results.len(), 1);
+
+    let record = results.get(0).unwrap();
+    assert_eq!(record.version, 1);
+    assert_eq!(record.caller, caller);
+}
+
+#[test]
+fn test_event_framework_invalid_type() {
+    let (env, client, caller) = setup_env();
+    let admin = Address::generate(&env);
+
+    client.init_event_framework(&admin);
+
+    let payload = BytesN::from_array(&env, &[1u8; 256]);
+    let invalid = client.try_emit_standard_event(&caller, &symbol_short!("other"), &payload);
+    assert!(invalid.is_err());
+}
+
+// ─── fleet manager ────────────────────────────────────────────────────────
+
+#[test]
+fn test_fleet_register_and_sync() {
+    let (env, client, owner) = setup_env();
+
+    client.init_fleet_templates();
+
+    let ship_1 = Ship {
+        id: 1,
+        owner: owner.clone(),
+        name: String::from_str(&env, "Voyager"),
+        level: 2,
+        scan_range: 4,
+    };
+    let ship_2 = Ship {
+        id: 2,
+        owner: owner.clone(),
+        name: String::from_str(&env, "Pioneer"),
+        level: 3,
+        scan_range: 5,
+    };
+
+    client.register_ship_for_owner(&owner, &ship_1);
+    client.register_ship_for_owner(&owner, &ship_2);
+
+    let ship_ids = vec![&env, 1u64, 2u64];
+    let fleet = client.register_fleet(&owner, &ship_ids, &1);
+    assert!(fleet.id > 0);
+    assert_eq!(fleet.ship_ids.len(), 2);
+    assert!(fleet.immutable_membership);
+
+    let status = client.sync_fleet_status(&fleet.id);
+    assert_eq!(status.total_level, 5);
+    assert!(status.average_scan_range >= 4);
+    assert_eq!(status.vessel_count, 2);
+}
+
+#[test]
+fn test_fleet_rejects_too_many_ships() {
+    let (env, client, owner) = setup_env();
+
+    client.init_fleet_templates();
+
+    let mut ship_ids = Vec::new(&env);
+    for i in 1u64..=11u64 {
+        let ship = Ship {
+            id: i,
+            owner: owner.clone(),
+            name: String::from_str(&env, "Scout"),
+            level: 1,
+            scan_range: 2,
+        };
+        client.register_ship_for_owner(&owner, &ship);
+        ship_ids.push_back(i);
+    }
+
+    let result = client.try_register_fleet(&owner, &ship_ids, &1);
+    assert!(result.is_err());
+}
